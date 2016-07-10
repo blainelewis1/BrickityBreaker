@@ -1,0 +1,291 @@
+<html>
+<head>
+  <title>Pongin</title>
+  <style>
+    canvas {
+      margin: auto;
+      display:block;
+    }
+  </style>
+</head>
+<body>
+<!--<div id="wrapper">-->
+<canvas id="game-canvas"></canvas>
+<!--</div>-->
+<script type="text/javascript">
+/*
+//Stack count = 4
+//Start = 12:03
+
+//Drawing = 12:30
+//Moving = 12:50
+//Dude who doesn't know how to use a condom or control his 5 kids boarded train = 1:00
+//Aforementioned asshole deboarded = 1:15
+
+//Offtrain/break = 1:20
+
+//Arrived at AirBnB = 2:10
+//Collisions = 5:08 (including 2 hour break)
+//End condition (MVP) = 5:19
+
+*/
+
+//TODO: endscreen
+//TODO: HUD (lives left, points)
+//TODO: bonuses
+//TODO: restart key
+//TODO: refactor
+//TODO: reduce namespace clutter and what not, make functions nicer (world object maybe, then move all the objects into that and let it handle physics and stuff)
+//TODO: make it work with mobile
+//TODO: fullscreen? or at least max height, then match the aspect ratio
+
+function generate_blocks(width, height, blockWidth, blockHeight) {
+  var blocks = [];
+
+  for(var i = 0; i < width; i++) {
+    for(var j = 0; j < height; j++){
+      blocks.push({x : blockWidth * i, y : blockHeight * j, width : blockWidth, height : blockHeight, color : "#4466AA"});
+    }
+  }
+
+  return blocks;
+}
+
+function draw_block(block) {
+  this.beginPath();
+  this.fillStyle = block.color;
+  this.fillRect(block.x, block.y, block.width, block.height);
+}
+
+function draw_ball(ball) {
+  this.beginPath();
+  this.fillStyle = ball.color;
+  this.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+  this.fill();
+}
+
+//TODO: not perfect, cant move all the way to edge.
+function move_paddle(paddle, canvas, left_key_down, right_key_down, delta_time) {
+  var moveAmount = paddle.speed * delta_time;
+
+  if(left_key_down && paddle.x > moveAmount) {
+    paddle.x -= moveAmount;
+  }
+
+  if(right_key_down && paddle.x < canvas.width - paddle.width - moveAmount) {
+    paddle.x += moveAmount;
+  }
+}
+
+function cross_product(u, v) {
+  return u.x * v.y - u.y * v.x;
+}
+
+function subtract(u,v) {
+  return {x : u.x - v.x, y : u.y - v.y};
+}
+
+function add(u,v) {
+  return {x : u.x + v.x, y : u.y + v.y};
+}
+
+function scalar_product(c, u) {
+  return {x : c * u.x, y : c * u.y};
+}
+
+function lines_intersect(p, r, q, s) {
+  var q_minus_p = subtract(q, p);
+
+  var q_minus_p_cross_s = cross_product(q_minus_p, s);
+  var q_minus_p_cross_r = cross_product(q_minus_p, r);
+
+  var r_cross_s = cross_product(r,s);
+
+  var t = q_minus_p_cross_s / r_cross_s;
+  var u = q_minus_p_cross_r / r_cross_s;
+
+  if(r_cross_s === 0) {
+    if (q_minus_p_cross_r === 0) {
+    //TODO: handle rcrosss == 0 (colinear case)
+      return false;
+    } else {
+      return false;
+    }
+  } else {
+    if(t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      return add(p, scalar_product(t, r));
+    }
+  }
+
+  return false;
+}
+
+function collides_paddle(p, r, paddle, ball) {
+  var intersects_at = lines_intersect(p, r, {x : paddle.x, y : paddle.y}, {x : paddle.width, y : 0});
+
+  if (intersects_at) {
+    var sensitivity = 5; //larger number = less sensitive
+    //Bias the normal according to where it hit on the paddle
+    var bias = -((paddle.x + (paddle.width / 2) - ball.x) / (paddle.width + sensitivity));
+
+    n = [bias, -Math.sqrt(1 - bias * bias)];
+  } else {
+    return false;
+  }
+
+  return {normal : n, at : intersects_at};
+}
+
+function collides_walls(p, r, canvas) {
+  var walls = [{q : {x : 0, y : 0}, s : {x : 0, y : canvas.height}, n : [1, 0]},
+              {q : {x : 0, y : 0}, s : {x : canvas.width, y : 0}, n : [0, 1]},
+              {q : {x : canvas.width, y : 0}, s : {x : 0, y : canvas.height}, n : [-1, 0]}];
+
+  for(var i = 0; i < walls.length; i++) {
+    var intersects_at = lines_intersect(p, r, walls[i].q, walls[i].s);
+    if(intersects_at) {
+      return {at : intersects_at, normal : walls[i].n};
+    }
+  }
+
+  return false;
+}
+
+function collides_blocks(p, r, blocks) {
+  for(var i = 0; i < blocks.length; i++) {
+    var block = blocks[i];
+    var sides = [{q : {x : block.x, y : block.y}, s : {x : 0, y : block.height}, n : [-1, 0]},
+                 {q : {x : block.x + block.width, y : block.y}, s : {x : 0, y : block.height}, n : [1, 0]},
+                 {q : {x : block.x, y : block.y}, s : {x : block.width, y : 0}, n : [0, -1]},
+                 {q : {x : block.x, y : block.y + block.height}, s : {x : block.width, y : 0}, n : [0, 1]}];
+
+    for(var j = 0; j < sides.length; j++) {
+      var intersects_at = lines_intersect(p, r, sides[j].q, sides[j].s);
+      if(intersects_at) {
+        blocks.splice(i, 1);
+        return {at : intersects_at, normal : sides[j].n};
+      }
+    }
+  }
+
+  return false;
+}
+
+function move_ball(ball, delta_time, paddle, canvas, blocks) {
+  var p = {x : ball.x, y : ball.y};
+  var r = {x : delta_time * ball.vx, y : delta_time * ball.vy};
+
+  var intersection = collides_paddle(p, r, paddle, ball);
+
+  if(!intersection) {
+    intersection = collides_walls(p, r, canvas);
+  }
+
+  if(!intersection) {
+    intersection = collides_blocks(p, r, blocks);
+  }
+
+  if(intersection) {
+    var vdotn = (ball.vx * intersection.normal[0]+ ball.vy * intersection.normal[1]);
+    var u = [vdotn * intersection.normal[0], vdotn * intersection.normal[1]];
+    var w = [ball.vx - u[0], ball.vy - u[1]];
+
+    ball.vx = w[0] - u[0];
+    ball.vy = w[1] - u[1];
+
+    //TODO: adjust to use the interesection point for more perfect bounces;
+  }
+
+  ball.x += delta_time * ball.vx;
+  ball.y += delta_time * ball.vy;
+}
+
+function Ball(canvas) {
+  this.radius = 5
+  this.vx = 0
+  this.vy = 0.25
+  this.speed = 0.25
+  this.color = "#44AA44";
+  this.x = (canvas.width - this.radius) / 2;
+  this.y = (canvas.height - this.radius) / 2;
+}
+
+function Paddle(canvas) {
+  this.width = 50
+  this.height = 10
+  this.speed = 0.25
+  this.color = "#AAAAAA";
+
+  this.x = (canvas.width - this.width) / 2;
+  this.y = canvas.height - this.height;
+}
+
+(function() {
+  var canvas = document.getElementById("game-canvas");
+  var context = canvas.getContext("2d");
+
+  canvas.width = 400;
+  canvas.height = 700;
+
+
+  var blocks = generate_blocks(10, 15, 40, 20);
+  var paddle = new Paddle(canvas);
+  var ball = new Ball(canvas);
+
+  var left_key_down = false;
+  var right_key_down = false;
+
+  var lives = 3;
+
+  var previous_time;
+  function step(current_time) {
+    var delta_time = previous_time === undefined ? 0 : current_time - previous_time;
+
+    //TODO: signature is super ugly.
+    move_paddle(paddle, canvas, left_key_down, right_key_down, delta_time, canvas, delta_time);
+    move_ball(ball, delta_time, paddle, canvas, blocks);
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    blocks.forEach(draw_block.bind(context));
+    draw_block.bind(context)(paddle);
+    draw_ball.bind(context)(ball);
+
+    if(ball.y > canvas.height + ball.radius) {
+      lives--;
+
+      if(lives > 0) {
+        ball = new Ball(canvas);
+        paddle = new Paddle(canvas);
+      } else {
+        return;
+      }
+    }
+
+    previous_time = current_time;
+    window.requestAnimationFrame(step);
+  }
+
+  function handleKeys(e) {
+    if(e.type === "keyup"){
+      val = false;
+    } else if(e.type === "keydown") {
+      val = true;
+    } else {
+      return;
+    }
+
+    if(e.keyCode === 65) {
+      left_key_down = val;
+    } else if(e.keyCode === 68) {
+      right_key_down = val;
+    }
+  }
+
+  document.addEventListener("keyup", handleKeys);
+  document.addEventListener("keydown", handleKeys);
+
+  step();
+})();
+</script>
+</body>
+</html>
