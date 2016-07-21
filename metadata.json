@@ -1,0 +1,6 @@
+{
+    "title" : "Pongin",
+    "summary" : "I challenged myself to create a brickbreaker within the shortest time possible. I'll attempt this challenge again in another month or so after gaining more experience and reading more Javascript books.",
+    "technologies" : ["canvas", "Javascript"],
+    "tags" : ["game"]
+}
